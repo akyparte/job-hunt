@@ -5,9 +5,17 @@ const path = require("path");
 const readline = require("readline");
 const nodemailer = require("nodemailer");
 
-const CONTACTS_FILE = path.join(__dirname, "contacts.json");
+const CONTACTS_FILE =
+  path.resolve(
+    __dirname,
+    process.env.CONTACTS_FILE || "./contacts.json"
+  );
 
-const PROGRESS_FILE = path.join(__dirname, "progress.json");
+const PROGRESS_FILE =
+  path.resolve(
+    __dirname,
+    process.env.PROGRESS_FILE || "./progress.json"
+  );
 
 // -----------------------------------------
 // ENV CONFIGURATION
