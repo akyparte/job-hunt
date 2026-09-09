@@ -5,31 +5,53 @@ const path = require("path");
 const readline = require("readline");
 const nodemailer = require("nodemailer");
 
-const CONTACTS_FILE = path.join(__dirname, "contacts.json");
-const ACCOUNTS_FILE = path.join(__dirname, "accounts.json");
-const PROGRESS_FILE = path.join(__dirname, "progress.json");
+const AccountManager =
+  require("./account-manager");
 
-const RESUME_PATH = path.resolve(
-  __dirname,
-  process.env.RESUME_PATH || "./resume.pdf"
-);
+const CONTACTS_FILE =
+  path.join(__dirname, "contacts.json");
 
-const WAIT_TIME = 15 * 1000;
+const ACCOUNTS_FILE =
+  path.join(__dirname, "accounts.json");
 
-const SUBJECT =
-  "Full Stack Developer | Node.js Backend Developer | Immediate Joiner";
+const PROGRESS_FILE =
+  path.join(__dirname, "progress.json");
 
-const contacts = JSON.parse(
-  fs.readFileSync(CONTACTS_FILE, "utf8")
-);
+const RESUME_PATH =
+  path.resolve(
+    __dirname,
+    process.env.RESUME_PATH ||
+      "./resume.pdf"
+  );
 
-const accounts = JSON.parse(
-  fs.readFileSync(ACCOUNTS_FILE, "utf8")
-);
+const WAIT_SECONDS =
+  Number(
+    process.env.WAIT_SECONDS || 25
+  );
 
-let progress = JSON.parse(
-  fs.readFileSync(PROGRESS_FILE, "utf8")
-);
+const contacts =
+  JSON.parse(
+    fs.readFileSync(
+      CONTACTS_FILE,
+      "utf8"
+    )
+  );
+
+const accounts =
+  JSON.parse(
+    fs.readFileSync(
+      ACCOUNTS_FILE,
+      "utf8"
+    )
+  );
+
+let progress =
+  JSON.parse(
+    fs.readFileSync(
+      PROGRESS_FILE,
+      "utf8"
+    )
+  );
 
 progress.nextContactIndex ??= 0;
 progress.nextAccountIndex ??= 0;
@@ -41,39 +63,27 @@ progress.skipped ??= [];
 function saveProgress() {
   fs.writeFileSync(
     PROGRESS_FILE,
-    JSON.stringify(progress, null, 2)
+    JSON.stringify(
+      progress,
+      null,
+      2
+    )
   );
 }
 
-function today() {
-  return new Date().toISOString().slice(0, 10);
-}
+function getToday() {
+  const now = new Date();
 
-function getAccountStats(account) {
-  const currentDate = today();
+  const year = now.getFullYear();
+  const month = String(
+    now.getMonth() + 1
+  ).padStart(2, "0");
 
-  if (!progress.accountStats[account.email]) {
-    progress.accountStats[account.email] = {
-      date: currentDate,
-      sentToday: 0
-    };
+  const day = String(
+    now.getDate()
+  ).padStart(2, "0");
 
-    saveProgress();
-
-    return progress.accountStats[account.email];
-  }
-
-  const stats = progress.accountStats[account.email];
-
-  // New day → reset today's counter
-  if (stats.date !== currentDate) {
-    stats.date = currentDate;
-    stats.sentToday = 0;
-
-    saveProgress();
-  }
-
-  return stats;
+  return `${year}-${month}-${day}`;
 }
 
 function createBody(name) {
@@ -99,222 +109,200 @@ function wait(ms) {
 }
 
 function ask(question) {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-  });
+  const rl =
+    readline.createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
 
   return new Promise(resolve => {
-    rl.question(question, answer => {
-      rl.close();
-      resolve(answer.trim());
-    });
+    rl.question(
+      question,
+      answer => {
+        rl.close();
+        resolve(
+          answer.trim()
+        );
+      }
+    );
   });
 }
 
-async function chooseAccount() {
-  console.log("\nAvailable accounts:\n");
+function printAccountStatus(
+  accountManager
+) {
+  console.log(
+    "\nACCOUNT STATUS"
+  );
 
-  accounts.forEach((account, index) => {
-    const stats = getAccountStats(account);
+  console.log(
+    "---------------------------------"
+  );
+
+  for (
+    const account of accounts
+  ) {
+    const status =
+      accountManager.getStatus(
+        account
+      );
 
     console.log(
-      `${index + 1}. ${account.email} | ` +
-      `${stats.sentToday}/${account.dailyLimit} today`
+      `${status.email} | ` +
+      `${status.sentToday}/` +
+      `${status.dailyLimit} today`
     );
-  });
+  }
+
+  console.log(
+    "---------------------------------\n"
+  );
+}
+
+function printOverallProgress() {
+  console.log(
+    `Overall sent : ${progress.sent.length}`
+  );
+
+  console.log(
+    `Failed       : ${progress.failed.length}`
+  );
+
+  console.log(
+    `Skipped      : ${progress.skipped.length}`
+  );
+
+  console.log(
+    `Remaining    : ${
+      contacts.length -
+      progress.nextContactIndex
+    }`
+  );
+}
+
+async function selectAccount(
+  accountManager
+) {
+  console.log(
+    "\nAvailable accounts:\n"
+  );
+
+  accounts.forEach(
+    (account, index) => {
+      const status =
+        accountManager.getStatus(
+          account
+        );
+
+      console.log(
+        `${index + 1}. ` +
+        `${account.email} | ` +
+        `${status.sentToday}/` +
+        `${status.dailyLimit} today`
+      );
+    }
+  );
 
   while (true) {
-    const answer = await ask(
-      "\nSelect account: "
-    );
+    const answer =
+      await ask(
+        "\nSelect account: "
+      );
 
-    const index = Number(answer) - 1;
+    const index =
+      Number(answer) - 1;
 
     if (
       Number.isInteger(index) &&
       accounts[index]
     ) {
-      return {
-        account: accounts[index],
-        index
-      };
+      return accounts[index];
     }
 
-    console.log("Invalid account.");
+    console.log(
+      "Invalid account."
+    );
   }
 }
 
-function createTransporter(account, password) {
-  return nodemailer.createTransport({
-    service: "gmail",
-
-    auth: {
-      user: account.email,
-      pass: password
-    }
-  });
-}
-
-function printProgress(account) {
-  const stats = getAccountStats(account);
-
-  console.log("\n=================================");
-  console.log("             PROGRESS");
-  console.log("=================================");
-
-  console.log(
-    `Total contacts : ${contacts.length}`
-  );
-
-  console.log(
-    `Overall sent   : ${progress.sent.length}`
-  );
-
-  console.log(
-    `Failed         : ${progress.failed.length}`
-  );
-
-  console.log(
-    `Skipped        : ${progress.skipped.length}`
-  );
-
-  console.log(
-    `Remaining      : ${
-      contacts.length -
-      progress.nextContactIndex
-    }`
-  );
-
-  console.log("---------------------------------");
-
-  console.log(
-    `Account        : ${account.email}`
-  );
-
-  console.log(
-    `Today          : ${stats.sentToday}/${account.dailyLimit}`
-  );
-
-  console.log(
-    `Date           : ${stats.date}`
-  );
-
-  console.log("---------------------------------");
-
-  console.log(
-    `Next contact   : #${
-      progress.nextContactIndex + 1
-    }`
-  );
-
-  console.log("=================================\n");
-}
-
-async function sendContact(
-  transporter,
-  account,
-  contact,
-  contactIndex
-) {
-  const info = await transporter.sendMail({
-    from: account.email,
-
-    to: contact.email,
-
-    subject: SUBJECT,
-
-    text: createBody(contact.name),
-
-    attachments: [
-      {
-        filename: path.basename(RESUME_PATH),
-        path: RESUME_PATH
-      }
-    ]
-  });
-
-  const stats = getAccountStats(account);
-
-  stats.sentToday++;
-
-  progress.sent.push({
-    contactIndex,
-
-    name: contact.name,
-
-    email: contact.email,
-
-    from: account.email,
-
-    messageId: info.messageId,
-
-    sentAt: new Date().toISOString()
-  });
-
-  progress.nextContactIndex =
-    contactIndex + 1;
-
-  saveProgress();
-
-  return info;
-}
-
 async function main() {
-  console.log("\n=================================");
-  console.log("             HR MAILER");
-  console.log("=================================\n");
+  console.log(
+    "\n================================="
+  );
+
+  console.log(
+    "             HR MAILER"
+  );
+
+  console.log(
+    "=================================\n"
+  );
 
   if (!contacts.length) {
-    console.log("No contacts found.");
+    console.log(
+      "contacts.json is empty."
+    );
+
     return;
   }
 
   if (!accounts.length) {
-    console.log("No sending accounts found.");
+    console.log(
+      "accounts.json is empty."
+    );
+
     return;
   }
 
-  if (!fs.existsSync(RESUME_PATH)) {
+  if (
+    !fs.existsSync(
+      RESUME_PATH
+    )
+  ) {
     throw new Error(
       `Resume not found: ${RESUME_PATH}`
     );
   }
 
-  if (
-    progress.nextContactIndex >=
-    contacts.length
-  ) {
-    console.log(
-      "All contacts have already been processed."
+  const accountManager =
+    new AccountManager(
+      accounts,
+      progress,
+      saveProgress
     );
 
-    return;
-  }
+  console.log(
+    `Date: ${getToday()}`
+  );
 
-  const selected =
-    await chooseAccount();
+  console.log(
+    `Total contacts: ${contacts.length}`
+  );
+
+  printOverallProgress();
+
+  printAccountStatus(
+    accountManager
+  );
 
   const account =
-    selected.account;
-
-  const accountIndex =
-    selected.index;
-
-  const stats =
-    getAccountStats(account);
-
-  if (
-    stats.sentToday >=
-    account.dailyLimit
-  ) {
-    console.log(
-      `\n${account.email} has reached ` +
-      `its configured daily limit.`
+    await selectAccount(
+      accountManager
     );
 
+  const status =
+    accountManager.getStatus(
+      account
+    );
+
+  if (
+    status.sentToday >=
+    status.dailyLimit
+  ) {
     console.log(
-      `Sent today: ${stats.sentToday}`
+      `\n${account.email} has ` +
+      `already reached today's ` +
+      `configured limit.`
     );
 
     return;
@@ -322,16 +310,20 @@ async function main() {
 
   const password =
     await ask(
-      `Enter App Password for ${account.email}: `
+      `\nEnter App Password for ` +
+      `${account.email}: `
     );
 
   const transporter =
-    createTransporter(
-      account,
-      password
-    );
+    nodemailer.createTransport({
+      service: "gmail",
 
-  // Verify authentication before starting.
+      auth: {
+        user: account.email,
+        pass: password
+      }
+    });
+
   try {
     await transporter.verify();
 
@@ -350,23 +342,22 @@ async function main() {
     return;
   }
 
-  printProgress(account);
-
-  /*
-   * Process contacts sequentially.
-   * Each email requires explicit confirmation.
-   */
   for (
-    let i = progress.nextContactIndex;
+    let i =
+      progress.nextContactIndex;
+
     i < contacts.length;
+
     i++
   ) {
-    const stats =
-      getAccountStats(account);
+    const currentStatus =
+      accountManager.getStatus(
+        account
+      );
 
     if (
-      stats.sentToday >=
-      account.dailyLimit
+      currentStatus.sentToday >=
+      currentStatus.dailyLimit
     ) {
       saveProgress();
 
@@ -374,32 +365,23 @@ async function main() {
         "\nDaily configured limit reached."
       );
 
-      console.log(
-        `Account: ${account.email}`
-      );
-
-      console.log(
-        `Sent today: ${stats.sentToday}`
-      );
-
-      console.log(
-        `Next contact: #${
-          progress.nextContactIndex + 1
-        }`
-      );
-
       return;
     }
 
-    const contact = contacts[i];
+    const contact =
+      contacts[i];
 
-    console.log("\n---------------------------------");
+    console.log(
+      "\n---------------------------------"
+    );
 
     console.log(
       `Contact ${i + 1}/${contacts.length}`
     );
 
-    console.log("---------------------------------");
+    console.log(
+      "---------------------------------"
+    );
 
     console.log(
       `Name    : ${contact.name}`
@@ -414,19 +396,27 @@ async function main() {
     );
 
     console.log(
-      `Subject : ${SUBJECT}`
-    );
-
-    console.log("\nBODY:\n");
-
-    console.log(
-      createBody(contact.name)
+      `Subject : ` +
+      `Full Stack Developer | ` +
+      `Node.js Backend Developer | ` +
+      `Immediate Joiner`
     );
 
     console.log(
-      `\nAttachment: ${
-        path.basename(RESUME_PATH)
-      }`
+      "\nBODY:\n"
+    );
+
+    console.log(
+      createBody(
+        contact.name
+      )
+    );
+
+    console.log(
+      `\nAttachment: ` +
+      `${path.basename(
+        RESUME_PATH
+      )}`
     );
 
     const answer =
@@ -435,7 +425,8 @@ async function main() {
       );
 
     if (
-      answer.toLowerCase() === "q"
+      answer.toLowerCase() ===
+      "q"
     ) {
       saveProgress();
 
@@ -447,7 +438,8 @@ async function main() {
     }
 
     if (
-      answer.toLowerCase() === "s"
+      answer.toLowerCase() ===
+      "s"
     ) {
       progress.skipped.push({
         contactIndex: i,
@@ -462,13 +454,16 @@ async function main() {
 
       saveProgress();
 
-      console.log("Skipped.");
+      console.log(
+        "Skipped."
+      );
 
       continue;
     }
 
     if (
-      answer.toLowerCase() !== "y"
+      answer.toLowerCase() !==
+      "y"
     ) {
       console.log(
         "Invalid option."
@@ -480,15 +475,58 @@ async function main() {
     }
 
     try {
-      console.log("\nSending...");
+      console.log(
+        "\nSending..."
+      );
 
       const info =
-        await sendContact(
-          transporter,
-          account,
-          contact,
-          i
-        );
+        await transporter.sendMail({
+          from: account.email,
+
+          to: contact.email,
+
+          subject:
+            "Full Stack Developer | " +
+            "Node.js Backend Developer | " +
+            "Immediate Joiner",
+
+          text:
+            createBody(
+              contact.name
+            ),
+
+          attachments: [
+            {
+              filename:
+                path.basename(
+                  RESUME_PATH
+                ),
+
+              path:
+                RESUME_PATH
+            }
+          ]
+        });
+
+      accountManager.incrementSent(
+        account
+      );
+
+      progress.sent.push({
+        contactIndex: i,
+        name: contact.name,
+        email: contact.email,
+        from: account.email,
+        messageId:
+          info.messageId,
+        sentAt:
+          new Date().toISOString()
+      });
+
+      progress.nextContactIndex =
+        i + 1;
+
+      saveProgress();
 
       console.log(
         "\n✓ Email sent."
@@ -498,37 +536,57 @@ async function main() {
         `Message ID: ${info.messageId}`
       );
 
-      printProgress(account);
+      printOverallProgress();
 
-      /*
-       * Wait 15 seconds before the next
-       * manually approved send.
-       */
+      const updatedStatus =
+        accountManager.getStatus(
+          account
+        );
+
+      console.log(
+        `\n${account.email}: ` +
+        `${updatedStatus.sentToday}/` +
+        `${updatedStatus.dailyLimit} today`
+      );
+
       if (
-        i < contacts.length - 1
+        i < contacts.length - 1 &&
+        updatedStatus.sentToday <
+          updatedStatus.dailyLimit
       ) {
         console.log(
-          "Waiting 15 seconds..."
+          `\nWaiting ${WAIT_SECONDS} ` +
+          `seconds...`
         );
 
         for (
-          let seconds = 15;
+          let seconds =
+            WAIT_SECONDS;
           seconds > 0;
           seconds--
         ) {
           process.stdout.write(
-            `\rNext contact in ${seconds}s`
+            `\rNext email in ` +
+            `${seconds}s`
           );
 
           await wait(1000);
         }
 
-        console.log("\n");
+        console.log(
+          "\n"
+        );
       }
 
     } catch (error) {
+      /*
+       * IMPORTANT:
+       * Do not automatically retry a Gmail
+       * sending error.
+       */
+
       console.error(
-        "\n✗ Email failed."
+        "\n✗ Gmail/email sending error:"
       );
 
       console.error(
@@ -537,15 +595,10 @@ async function main() {
 
       progress.failed.push({
         contactIndex: i,
-
         name: contact.name,
-
         email: contact.email,
-
         from: account.email,
-
         error: error.message,
-
         failedAt:
           new Date().toISOString()
       });
@@ -556,48 +609,33 @@ async function main() {
         "\nFailure saved to progress.json."
       );
 
-      const retry =
-        await ask(
-          "[r] Retry  [s] Skip  [q] Quit: "
-        );
+      console.log(
+        "Script stopped."
+      );
 
-      if (
-        retry.toLowerCase() === "q"
-      ) {
-        saveProgress();
-
-        return;
-      }
-
-      if (
-        retry.toLowerCase() === "s"
-      ) {
-        progress.skipped.push({
-          contactIndex: i,
-          name: contact.name,
-          email: contact.email,
-          skippedAt:
-            new Date().toISOString()
-        });
-
-        progress.nextContactIndex =
-          i + 1;
-
-        saveProgress();
-      } else {
-        i--;
-      }
+      return;
     }
   }
 
   console.log(
-    "\n✓ All contacts processed."
+    "\n================================="
+  );
+
+  console.log(
+    "All contacts processed."
+  );
+
+  console.log(
+    "================================="
   );
 }
 
 main().catch(error => {
   console.error(
-    "\nERROR:",
+    "\nFATAL ERROR:"
+  );
+
+  console.error(
     error.message
   );
 
