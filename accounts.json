@@ -1,0 +1,22 @@
+[
+  {
+    "id": "account1",
+    "email": "akshayparte580@gmail.com",
+    "dailyLimit": 300
+  },
+  {
+    "id": "account2",
+    "email": "akshayparte60@gmail.com",
+    "dailyLimit": 300
+  },
+  {
+    "id": "account3",
+    "email": "akshayparte0728@gmail.com",
+    "dailyLimit": 300
+  },
+  {
+    "id": "account4",
+    "email": "parteakshay511@gmail.com",
+    "dailyLimit": 300
+  }
+]
