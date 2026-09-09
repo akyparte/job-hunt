@@ -2,20 +2,21 @@ require("dotenv").config();
 
 const fs = require("fs");
 const path = require("path");
-const readline = require("readline");
 const nodemailer = require("nodemailer");
 
-const CONTACTS_FILE =
-  path.resolve(
-    __dirname,
-    process.env.CONTACTS_FILE || "./contacts.json"
-  );
+// -----------------------------------------
+// FILE CONFIGURATION
+// -----------------------------------------
 
-const PROGRESS_FILE =
-  path.resolve(
-    __dirname,
-    process.env.PROGRESS_FILE || "./progress.json"
-  );
+const CONTACTS_FILE = path.resolve(
+  __dirname,
+  process.env.CONTACTS_FILE || "./contacts.json",
+);
+
+const PROGRESS_FILE = path.resolve(
+  __dirname,
+  process.env.PROGRESS_FILE || "./progress.json",
+);
 
 // -----------------------------------------
 // ENV CONFIGURATION
@@ -39,28 +40,73 @@ const RESUME_PATH = path.resolve(
 // -----------------------------------------
 
 if (!GMAIL_USER) {
-  throw new Error("GMAIL_USER is missing from .env");
+  throw new Error("GMAIL_USER is missing from environment.");
 }
 
 if (!GMAIL_APP_PASSWORD) {
-  throw new Error("GMAIL_APP_PASSWORD is missing from .env");
+  throw new Error("GMAIL_APP_PASSWORD is missing from environment.");
 }
 
 if (!Number.isInteger(DAILY_LIMIT) || DAILY_LIMIT <= 0) {
-  throw new Error("DAILY_LIMIT must be a positive number");
+  throw new Error("DAILY_LIMIT must be a positive number.");
 }
 
 if (!Number.isInteger(WAIT_SECONDS) || WAIT_SECONDS < 0) {
-  throw new Error("WAIT_SECONDS must be 0 or greater");
+  throw new Error("WAIT_SECONDS must be 0 or greater.");
 }
 
 // -----------------------------------------
-// FILE PATHS
+// READ CONTACTS
 // -----------------------------------------
+
+if (!fs.existsSync(CONTACTS_FILE)) {
+  throw new Error(`Contacts file not found: ${CONTACTS_FILE}`);
+}
 
 const contacts = JSON.parse(fs.readFileSync(CONTACTS_FILE, "utf8"));
 
-let progress = JSON.parse(fs.readFileSync(PROGRESS_FILE, "utf8"));
+// -----------------------------------------
+// VALIDATE CONTACTS
+// -----------------------------------------
+
+if (!Array.isArray(contacts)) {
+  throw new Error("Contacts file must contain a JSON array.");
+}
+
+// -----------------------------------------
+// LOAD OR CREATE PROGRESS
+// -----------------------------------------
+
+let progress = {};
+
+if (fs.existsSync(PROGRESS_FILE)) {
+  try {
+    progress = JSON.parse(fs.readFileSync(PROGRESS_FILE, "utf8"));
+  } catch (error) {
+    throw new Error(
+      `Unable to read progress file: ${PROGRESS_FILE}\n${error.message}`,
+    );
+  }
+} else {
+  progress = {
+    nextContactIndex: 0,
+
+    account: {
+      email: "",
+      date: "",
+      sentToday: 0,
+      dailyLimit: 0,
+    },
+
+    sent: [],
+    failed: [],
+    skipped: [],
+  };
+
+  fs.writeFileSync(PROGRESS_FILE, JSON.stringify(progress, null, 2), "utf8");
+
+  console.log(`Created progress file: ${PROGRESS_FILE}`);
+}
 
 // -----------------------------------------
 // INITIALIZE PROGRESS
@@ -84,7 +130,7 @@ progress.skipped ??= [];
 // -----------------------------------------
 
 function saveProgress() {
-  fs.writeFileSync(PROGRESS_FILE, JSON.stringify(progress, null, 2));
+  fs.writeFileSync(PROGRESS_FILE, JSON.stringify(progress, null, 2), "utf8");
 }
 
 // -----------------------------------------
@@ -104,33 +150,14 @@ function getToday() {
 }
 
 // -----------------------------------------
-// INPUT
-// -----------------------------------------
-
-function ask(question) {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  return new Promise((resolve) => {
-    rl.question(question, (answer) => {
-      rl.close();
-
-      resolve(answer.trim());
-    });
-  });
-}
-
-// -----------------------------------------
 // DAILY COUNTER RESET
 // -----------------------------------------
 
 function prepareAccountStats(email, dailyLimit) {
   const today = getToday();
 
-  // If this is a new account/session
-  // or the stored account is different.
+  // New account/session
+  // or stored account is different.
   if (progress.account.email !== email) {
     progress.account = {
       email,
@@ -206,6 +233,10 @@ function printOverallProgress() {
   );
 }
 
+// -----------------------------------------
+// ACCOUNT STATUS
+// -----------------------------------------
+
 function printAccountStatus() {
   const sentToday = progress.account.sentToday;
 
@@ -242,7 +273,7 @@ async function main() {
   // -----------------------------------------
 
   if (!contacts.length) {
-    console.log("contacts.json is empty.");
+    console.log(`Contacts file is empty: ${CONTACTS_FILE}`);
 
     return;
   }
@@ -261,11 +292,15 @@ async function main() {
 
   const waitSeconds = WAIT_SECONDS;
 
-  console.log(`Account: ${email}`);
+  console.log(`Account      : ${email}`);
 
-  console.log(`Daily limit: ${dailyLimit}`);
+  console.log(`Contacts     : ${CONTACTS_FILE}`);
 
-  console.log(`Wait: ${waitSeconds} seconds`);
+  console.log(`Progress     : ${PROGRESS_FILE}`);
+
+  console.log(`Daily limit  : ${dailyLimit}`);
+
+  console.log(`Wait         : ${waitSeconds} seconds`);
 
   console.log(`Total contacts: ${contacts.length}`);
 
@@ -304,6 +339,7 @@ async function main() {
 
     auth: {
       user: GMAIL_USER,
+
       pass: GMAIL_APP_PASSWORD,
     },
   });
@@ -329,7 +365,10 @@ async function main() {
   // -----------------------------------------
 
   for (let i = progress.nextContactIndex; i < contacts.length; i++) {
-    // Make sure the date is still current.
+    // -----------------------------------------
+    // MAKE SURE DATE IS CURRENT
+    // -----------------------------------------
+
     prepareAccountStats(email, dailyLimit);
 
     // -----------------------------------------
@@ -374,68 +413,10 @@ async function main() {
       "Subject : Full Stack Developer | Node.js Backend Developer | Immediate Joiner",
     );
 
-    console.log("\nBODY:\n");
-
-    console.log(createBody(contact.name));
-
-    console.log(`\nAttachment: ${path.basename(RESUME_PATH)}`);
+    console.log(`Attachment: ${path.basename(RESUME_PATH)}`);
 
     // -----------------------------------------
-    // USER DECISION
-    // -----------------------------------------
-
-    const answer = await ask("\n[y] Send  [s] Skip  [q] Quit: ");
-
-    // -----------------------------------------
-    // QUIT
-    // -----------------------------------------
-
-    if (answer.toLowerCase() === "q") {
-      saveProgress();
-
-      console.log("\nStopped. Progress saved.");
-
-      return;
-    }
-
-    // -----------------------------------------
-    // SKIP
-    // -----------------------------------------
-
-    if (answer.toLowerCase() === "s") {
-      progress.skipped.push({
-        contactIndex: i,
-
-        name: contact.name,
-
-        email: contact.email,
-
-        skippedAt: new Date().toISOString(),
-      });
-
-      progress.nextContactIndex = i + 1;
-
-      saveProgress();
-
-      console.log("Skipped.");
-
-      continue;
-    }
-
-    // -----------------------------------------
-    // INVALID OPTION
-    // -----------------------------------------
-
-    if (answer.toLowerCase() !== "y") {
-      console.log("Invalid option.");
-
-      i--;
-
-      continue;
-    }
-
-    // -----------------------------------------
-    // SEND
+    // SEND AUTOMATICALLY
     // -----------------------------------------
 
     try {
@@ -550,7 +531,7 @@ async function main() {
 
       saveProgress();
 
-      console.log("\nFailure saved to progress.json.");
+      console.log(`\nFailure saved to ${PROGRESS_FILE}.`);
 
       console.log("Script stopped.");
 
