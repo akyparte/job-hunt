@@ -1,0 +1,12 @@
+{
+  "nextContactIndex": 0,
+  "account": {
+    "email": "",
+    "date": "",
+    "sentToday": 0,
+    "dailyLimit": 0
+  },
+  "sent": [],
+  "failed": [],
+  "skipped": []
+}
