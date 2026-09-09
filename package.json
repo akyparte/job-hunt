@@ -1,9 +1,11 @@
 {
   "name": "hr-mailer",
   "version": "1.0.0",
+  "private": true,
   "type": "commonjs",
   "scripts": {
-    "start": "node mailer.js"
+    "start": "node mailer.js",
+    "status": "node status.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

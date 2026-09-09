@@ -5,14 +5,8 @@ const path = require("path");
 const readline = require("readline");
 const nodemailer = require("nodemailer");
 
-const AccountManager =
-  require("./account-manager");
-
 const CONTACTS_FILE =
   path.join(__dirname, "contacts.json");
-
-const ACCOUNTS_FILE =
-  path.join(__dirname, "accounts.json");
 
 const PROGRESS_FILE =
   path.join(__dirname, "progress.json");
@@ -20,27 +14,13 @@ const PROGRESS_FILE =
 const RESUME_PATH =
   path.resolve(
     __dirname,
-    process.env.RESUME_PATH ||
-      "./resume.pdf"
-  );
-
-const WAIT_SECONDS =
-  Number(
-    process.env.WAIT_SECONDS || 25
+    process.env.RESUME_PATH || "./resume.pdf"
   );
 
 const contacts =
   JSON.parse(
     fs.readFileSync(
       CONTACTS_FILE,
-      "utf8"
-    )
-  );
-
-const accounts =
-  JSON.parse(
-    fs.readFileSync(
-      ACCOUNTS_FILE,
       "utf8"
     )
   );
@@ -53,12 +33,28 @@ let progress =
     )
   );
 
+
+// -----------------------------------------
+// INITIALIZE PROGRESS
+// -----------------------------------------
+
 progress.nextContactIndex ??= 0;
-progress.nextAccountIndex ??= 0;
-progress.accountStats ??= {};
+
+progress.account ??= {
+  email: "",
+  date: "",
+  sentToday: 0,
+  dailyLimit: 0
+};
+
 progress.sent ??= [];
 progress.failed ??= [];
 progress.skipped ??= [];
+
+
+// -----------------------------------------
+// SAVE PROGRESS
+// -----------------------------------------
 
 function saveProgress() {
   fs.writeFileSync(
@@ -71,20 +67,168 @@ function saveProgress() {
   );
 }
 
+
+// -----------------------------------------
+// DATE
+// -----------------------------------------
+
 function getToday() {
   const now = new Date();
 
-  const year = now.getFullYear();
-  const month = String(
-    now.getMonth() + 1
-  ).padStart(2, "0");
+  const year =
+    now.getFullYear();
 
-  const day = String(
-    now.getDate()
-  ).padStart(2, "0");
+  const month =
+    String(
+      now.getMonth() + 1
+    ).padStart(2, "0");
+
+  const day =
+    String(
+      now.getDate()
+    ).padStart(2, "0");
 
   return `${year}-${month}-${day}`;
 }
+
+
+// -----------------------------------------
+// INPUT
+// -----------------------------------------
+
+function ask(question) {
+  const rl =
+    readline.createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+
+  return new Promise(resolve => {
+    rl.question(
+      question,
+      answer => {
+        rl.close();
+
+        resolve(
+          answer.trim()
+        );
+      }
+    );
+  });
+}
+
+
+// -----------------------------------------
+// PASSWORD INPUT
+// -----------------------------------------
+
+function askPassword(question) {
+  const stdin = process.stdin;
+
+  return new Promise(resolve => {
+    process.stdout.write(question);
+
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.setEncoding("utf8");
+
+    let password = "";
+
+    function onData(key) {
+
+      if (key === "\u0003") {
+        process.exit();
+      }
+
+      if (
+        key === "\r" ||
+        key === "\n"
+      ) {
+        stdin.setRawMode(false);
+        stdin.pause();
+
+        stdin.removeListener(
+          "data",
+          onData
+        );
+
+        process.stdout.write("\n");
+
+        resolve(password.trim());
+
+        return;
+      }
+
+      if (key === "\u007f") {
+        if (password.length > 0) {
+          password =
+            password.slice(0, -1);
+        }
+
+        return;
+      }
+
+      password += key;
+    }
+
+    stdin.on(
+      "data",
+      onData
+    );
+  });
+}
+
+
+// -----------------------------------------
+// DAILY COUNTER RESET
+// -----------------------------------------
+
+function prepareAccountStats(
+  email,
+  dailyLimit
+) {
+  const today =
+    getToday();
+
+  // If this is a new account/session
+  // or the stored account is different.
+  if (
+    progress.account.email !== email
+  ) {
+    progress.account = {
+      email,
+      date: today,
+      sentToday: 0,
+      dailyLimit
+    };
+
+    saveProgress();
+
+    return;
+  }
+
+  // Update configured daily limit.
+  progress.account.dailyLimit =
+    dailyLimit;
+
+  // New day → reset today's count.
+  if (
+    progress.account.date !== today
+  ) {
+    progress.account.date =
+      today;
+
+    progress.account.sentToday =
+      0;
+
+    saveProgress();
+  }
+}
+
+
+// -----------------------------------------
+// EMAIL BODY
+// -----------------------------------------
 
 function createBody(name) {
   return `Hi ${name},
@@ -102,62 +246,21 @@ Akshay Parte
 7021289701`;
 }
 
+
+// -----------------------------------------
+// WAIT
+// -----------------------------------------
+
 function wait(ms) {
   return new Promise(resolve => {
     setTimeout(resolve, ms);
   });
 }
 
-function ask(question) {
-  const rl =
-    readline.createInterface({
-      input: process.stdin,
-      output: process.stdout
-    });
 
-  return new Promise(resolve => {
-    rl.question(
-      question,
-      answer => {
-        rl.close();
-        resolve(
-          answer.trim()
-        );
-      }
-    );
-  });
-}
-
-function printAccountStatus(
-  accountManager
-) {
-  console.log(
-    "\nACCOUNT STATUS"
-  );
-
-  console.log(
-    "---------------------------------"
-  );
-
-  for (
-    const account of accounts
-  ) {
-    const status =
-      accountManager.getStatus(
-        account
-      );
-
-    console.log(
-      `${status.email} | ` +
-      `${status.sentToday}/` +
-      `${status.dailyLimit} today`
-    );
-  }
-
-  console.log(
-    "---------------------------------\n"
-  );
-}
+// -----------------------------------------
+// PRINT STATUS
+// -----------------------------------------
 
 function printOverallProgress() {
   console.log(
@@ -174,58 +277,64 @@ function printOverallProgress() {
 
   console.log(
     `Remaining    : ${
-      contacts.length -
-      progress.nextContactIndex
+      Math.max(
+        contacts.length -
+          progress.nextContactIndex,
+        0
+      )
     }`
   );
 }
 
-async function selectAccount(
-  accountManager
-) {
+
+function printAccountStatus() {
+  const sentToday =
+    progress.account.sentToday;
+
+  const dailyLimit =
+    progress.account.dailyLimit;
+
   console.log(
-    "\nAvailable accounts:\n"
+    "\nACCOUNT STATUS"
   );
 
-  accounts.forEach(
-    (account, index) => {
-      const status =
-        accountManager.getStatus(
-          account
-        );
-
-      console.log(
-        `${index + 1}. ` +
-        `${account.email} | ` +
-        `${status.sentToday}/` +
-        `${status.dailyLimit} today`
-      );
-    }
+  console.log(
+    "---------------------------------"
   );
 
-  while (true) {
-    const answer =
-      await ask(
-        "\nSelect account: "
-      );
+  console.log(
+    `Account   : ${progress.account.email}`
+  );
 
-    const index =
-      Number(answer) - 1;
+  console.log(
+    `Date      : ${progress.account.date}`
+  );
 
-    if (
-      Number.isInteger(index) &&
-      accounts[index]
-    ) {
-      return accounts[index];
-    }
+  console.log(
+    `Sent today: ${sentToday}/${dailyLimit}`
+  );
 
-    console.log(
-      "Invalid account."
-    );
-  }
+  console.log(
+    `Remaining : ${
+      Math.max(
+        dailyLimit - sentToday,
+        0
+      )
+    }`
+  );
+
+  console.log(
+    "---------------------------------\n"
+  );
 }
 
+
+// -----------------------------------------
+// MAIN
+// -----------------------------------------
+
 async function main() {
+
   console.log(
     "\n================================="
   );
@@ -238,17 +347,14 @@ async function main() {
     "=================================\n"
   );
 
+
+  // -----------------------------------------
+  // BASIC VALIDATION
+  // -----------------------------------------
+
   if (!contacts.length) {
     console.log(
       "contacts.json is empty."
-    );
-
-    return;
-  }
-
-  if (!accounts.length) {
-    console.log(
-      "accounts.json is empty."
     );
 
     return;
@@ -264,15 +370,116 @@ async function main() {
     );
   }
 
-  const accountManager =
-    new AccountManager(
-      accounts,
-      progress,
-      saveProgress
+
+  // -----------------------------------------
+  // ASK ACCOUNT
+  // -----------------------------------------
+
+  const email =
+    await ask(
+      "Enter Gmail account: "
     );
 
+
+  if (!email) {
+    console.log(
+      "Gmail account is required."
+    );
+
+    return;
+  }
+
+
+  // -----------------------------------------
+  // ASK DAILY LIMIT
+  // -----------------------------------------
+
+  let dailyLimit;
+
+  while (true) {
+
+    const input =
+      await ask(
+        "Enter daily limit: "
+      );
+
+    dailyLimit =
+      Number(input);
+
+    if (
+      Number.isInteger(
+        dailyLimit
+      ) &&
+      dailyLimit > 0
+    ) {
+      break;
+    }
+
+    console.log(
+      "Please enter a valid positive number."
+    );
+  }
+
+
+  // -----------------------------------------
+  // ASK WAIT TIME
+  // -----------------------------------------
+
+  let waitSeconds;
+
+  while (true) {
+
+    const input =
+      await ask(
+        "Enter wait seconds: "
+      );
+
+    waitSeconds =
+      Number(input);
+
+    if (
+      Number.isInteger(
+        waitSeconds
+      ) &&
+      waitSeconds >= 0
+    ) {
+      break;
+    }
+
+    console.log(
+      "Please enter 0 or a positive number."
+    );
+  }
+
+
+  // -----------------------------------------
+  // PREPARE ACCOUNT STATS
+  // -----------------------------------------
+
+  prepareAccountStats(
+    email,
+    dailyLimit
+  );
+
+
+  // -----------------------------------------
+  // DISPLAY CURRENT PROGRESS
+  // -----------------------------------------
+
   console.log(
-    `Date: ${getToday()}`
+    `\nDate: ${getToday()}`
+  );
+
+  console.log(
+    `Account: ${email}`
+  );
+
+  console.log(
+    `Daily limit: ${dailyLimit}`
+  );
+
+  console.log(
+    `Wait: ${waitSeconds} seconds`
   );
 
   console.log(
@@ -281,56 +488,76 @@ async function main() {
 
   printOverallProgress();
 
-  printAccountStatus(
-    accountManager
-  );
+  printAccountStatus();
 
-  const account =
-    await selectAccount(
-      accountManager
-    );
 
-  const status =
-    accountManager.getStatus(
-      account
-    );
+  // -----------------------------------------
+  // DAILY LIMIT CHECK
+  // -----------------------------------------
 
   if (
-    status.sentToday >=
-    status.dailyLimit
+    progress.account.sentToday >=
+    dailyLimit
   ) {
+
     console.log(
-      `\n${account.email} has ` +
-      `already reached today's ` +
-      `configured limit.`
+      "\nDaily limit already reached."
     );
 
     return;
   }
 
+
+  // -----------------------------------------
+  // APP PASSWORD
+  // -----------------------------------------
+
   const password =
-    await ask(
-      `\nEnter App Password for ` +
-      `${account.email}: `
+    await askPassword(
+      `Enter App Password for ${email}: `
     );
+
+
+  if (!password) {
+    console.log(
+      "App Password is required."
+    );
+
+    return;
+  }
+
+
+  // -----------------------------------------
+  // CREATE GMAIL TRANSPORTER
+  // -----------------------------------------
 
   const transporter =
     nodemailer.createTransport({
+
       service: "gmail",
 
       auth: {
-        user: account.email,
+        user: email,
         pass: password
       }
+
     });
 
+
+  // -----------------------------------------
+  // VERIFY GMAIL
+  // -----------------------------------------
+
   try {
+
     await transporter.verify();
 
     console.log(
       "\n✓ Gmail authentication successful."
     );
+
   } catch (error) {
+
     console.error(
       "\n✗ Gmail authentication failed:"
     );
@@ -342,6 +569,11 @@ async function main() {
     return;
   }
 
+
+  // -----------------------------------------
+  // SEND LOOP
+  // -----------------------------------------
+
   for (
     let i =
       progress.nextContactIndex;
@@ -350,26 +582,56 @@ async function main() {
 
     i++
   ) {
-    const currentStatus =
-      accountManager.getStatus(
-        account
-      );
+
+    // Make sure the date is still current.
+    prepareAccountStats(
+      email,
+      dailyLimit
+    );
+
+
+    // -----------------------------------------
+    // DAILY LIMIT
+    // -----------------------------------------
 
     if (
-      currentStatus.sentToday >=
-      currentStatus.dailyLimit
+      progress.account.sentToday >=
+      dailyLimit
     ) {
+
       saveProgress();
 
       console.log(
-        "\nDaily configured limit reached."
+        "\n================================="
+      );
+
+      console.log(
+        "Daily limit reached."
+      );
+
+      console.log(
+        `Sent today: ${progress.account.sentToday}/${dailyLimit}`
+      );
+
+      console.log(
+        "Progress saved."
+      );
+
+      console.log(
+        "================================="
       );
 
       return;
     }
 
+
+    // -----------------------------------------
+    // CONTACT
+    // -----------------------------------------
+
     const contact =
       contacts[i];
+
 
     console.log(
       "\n---------------------------------"
@@ -392,14 +654,11 @@ async function main() {
     );
 
     console.log(
-      `From    : ${account.email}`
+      `From    : ${email}`
     );
 
     console.log(
-      `Subject : ` +
-      `Full Stack Developer | ` +
-      `Node.js Backend Developer | ` +
-      `Immediate Joiner`
+      `Subject : Full Stack Developer | Node.js Backend Developer | Immediate Joiner`
     );
 
     console.log(
@@ -413,21 +672,31 @@ async function main() {
     );
 
     console.log(
-      `\nAttachment: ` +
-      `${path.basename(
+      `\nAttachment: ${path.basename(
         RESUME_PATH
       )}`
     );
+
+
+    // -----------------------------------------
+    // USER DECISION
+    // -----------------------------------------
 
     const answer =
       await ask(
         "\n[y] Send  [s] Skip  [q] Quit: "
       );
 
+
+    // -----------------------------------------
+    // QUIT
+    // -----------------------------------------
+
     if (
       answer.toLowerCase() ===
       "q"
     ) {
+
       saveProgress();
 
       console.log(
@@ -437,22 +706,38 @@ async function main() {
       return;
     }
 
+
+    // -----------------------------------------
+    // SKIP
+    // -----------------------------------------
+
     if (
       answer.toLowerCase() ===
       "s"
     ) {
+
       progress.skipped.push({
-        contactIndex: i,
-        name: contact.name,
-        email: contact.email,
+
+        contactIndex:
+          i,
+
+        name:
+          contact.name,
+
+        email:
+          contact.email,
+
         skippedAt:
           new Date().toISOString()
       });
 
+
       progress.nextContactIndex =
         i + 1;
 
+
       saveProgress();
+
 
       console.log(
         "Skipped."
@@ -461,10 +746,16 @@ async function main() {
       continue;
     }
 
+
+    // -----------------------------------------
+    // INVALID OPTION
+    // -----------------------------------------
+
     if (
       answer.toLowerCase() !==
       "y"
     ) {
+
       console.log(
         "Invalid option."
       );
@@ -474,16 +765,26 @@ async function main() {
       continue;
     }
 
+
+    // -----------------------------------------
+    // SEND
+    // -----------------------------------------
+
     try {
+
       console.log(
         "\nSending..."
       );
 
+
       const info =
         await transporter.sendMail({
-          from: account.email,
 
-          to: contact.email,
+          from:
+            email,
+
+          to:
+            contact.email,
 
           subject:
             "Full Stack Developer | " +
@@ -508,25 +809,54 @@ async function main() {
           ]
         });
 
-      accountManager.incrementSent(
-        account
-      );
+
+      // -----------------------------------------
+      // UPDATE SENT COUNT
+      // -----------------------------------------
+
+      progress.account.sentToday++;
+
+
+      // -----------------------------------------
+      // SAVE SENT RECORD
+      // -----------------------------------------
 
       progress.sent.push({
-        contactIndex: i,
-        name: contact.name,
-        email: contact.email,
-        from: account.email,
+
+        contactIndex:
+          i,
+
+        name:
+          contact.name,
+
+        email:
+          contact.email,
+
+        from:
+          email,
+
         messageId:
           info.messageId,
+
         sentAt:
           new Date().toISOString()
       });
 
+
+      // -----------------------------------------
+      // NEXT CONTACT
+      // -----------------------------------------
+
       progress.nextContactIndex =
         i + 1;
 
+
       saveProgress();
+
+
+      // -----------------------------------------
+      // SUCCESS
+      // -----------------------------------------
 
       console.log(
         "\n✓ Email sent."
@@ -536,42 +866,48 @@ async function main() {
         `Message ID: ${info.messageId}`
       );
 
+      console.log(
+        `Sent today: ${
+          progress.account.sentToday
+        }/${dailyLimit}`
+      );
+
+
       printOverallProgress();
 
-      const updatedStatus =
-        accountManager.getStatus(
-          account
-        );
 
-      console.log(
-        `\n${account.email}: ` +
-        `${updatedStatus.sentToday}/` +
-        `${updatedStatus.dailyLimit} today`
-      );
+      // -----------------------------------------
+      // WAIT
+      // -----------------------------------------
 
       if (
         i < contacts.length - 1 &&
-        updatedStatus.sentToday <
-          updatedStatus.dailyLimit
+        progress.account.sentToday <
+          dailyLimit &&
+        waitSeconds > 0
       ) {
+
         console.log(
-          `\nWaiting ${WAIT_SECONDS} ` +
-          `seconds...`
+          `\nWaiting ${waitSeconds} seconds...`
         );
+
 
         for (
           let seconds =
-            WAIT_SECONDS;
+            waitSeconds;
+
           seconds > 0;
+
           seconds--
         ) {
+
           process.stdout.write(
-            `\rNext email in ` +
-            `${seconds}s`
+            `\rNext email in ${seconds}s`
           );
 
           await wait(1000);
         }
+
 
         console.log(
           "\n"
@@ -579,11 +915,10 @@ async function main() {
       }
 
     } catch (error) {
-      /*
-       * IMPORTANT:
-       * Do not automatically retry a Gmail
-       * sending error.
-       */
+
+      // -----------------------------------------
+      // FAILURE
+      // -----------------------------------------
 
       console.error(
         "\n✗ Gmail/email sending error:"
@@ -593,17 +928,31 @@ async function main() {
         error.message
       );
 
+
       progress.failed.push({
-        contactIndex: i,
-        name: contact.name,
-        email: contact.email,
-        from: account.email,
-        error: error.message,
+
+        contactIndex:
+          i,
+
+        name:
+          contact.name,
+
+        email:
+          contact.email,
+
+        from:
+          email,
+
+        error:
+          error.message,
+
         failedAt:
           new Date().toISOString()
       });
 
+
       saveProgress();
+
 
       console.log(
         "\nFailure saved to progress.json."
@@ -616,6 +965,11 @@ async function main() {
       return;
     }
   }
+
+
+  // -----------------------------------------
+  // COMPLETE
+  // -----------------------------------------
 
   console.log(
     "\n================================="
@@ -630,7 +984,9 @@ async function main() {
   );
 }
 
+
 main().catch(error => {
+
   console.error(
     "\nFATAL ERROR:"
   );
