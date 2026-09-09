@@ -1,14 +1,23 @@
+
 const fs = require("fs");
 const path = require("path");
 
 const CONTACTS_FILE =
   path.join(__dirname, "contacts.json");
 
-const ACCOUNTS_FILE =
-  path.join(__dirname, "accounts.json");
+const PROGRESS_FILES = [
+  path.join(__dirname, "progress1.json"),
+  path.join(__dirname, "progress2.json"),
+  path.join(__dirname, "progress3.json"),
+  path.join(__dirname, "progress4.json"),
+];
 
-const PROGRESS_FILE =
-  path.join(__dirname, "progress.json");
+const EMAIL_ACCOUNTS = [
+  "akshayparte580@gmail.com",
+  "akshayparte60@gmail.com",
+  "akshayparte0728@gmail.com",
+  "parteakshay511@gmail.com",
+];
 
 const contacts =
   JSON.parse(
@@ -18,20 +27,15 @@ const contacts =
     )
   );
 
-const accounts =
-  JSON.parse(
-    fs.readFileSync(
-      ACCOUNTS_FILE,
-      "utf8"
-    )
-  );
-
-const progress =
-  JSON.parse(
-    fs.readFileSync(
-      PROGRESS_FILE,
-      "utf8"
-    )
+const progressFiles =
+  PROGRESS_FILES.map(
+    (file) =>
+      JSON.parse(
+        fs.readFileSync(
+          file,
+          "utf8"
+        )
+      )
   );
 
 function getToday() {
@@ -50,20 +54,20 @@ function getToday() {
   return `${year}-${month}-${day}`;
 }
 
-function getAccountStats(account) {
+function getAccountStats(
+  email,
+  progress
+) {
   const today = getToday();
 
   const stats =
-    progress.accountStats?.[
-      account.email
-    ];
+    progress.accountStats?.[email];
 
   if (!stats) {
     return {
       date: today,
       sentToday: 0,
-      dailyLimit:
-        account.dailyLimit || 300
+      dailyLimit: 300
     };
   }
 
@@ -79,7 +83,7 @@ function getAccountStats(account) {
       date: today,
       sentToday: 0,
       dailyLimit:
-        account.dailyLimit || 300
+        stats.dailyLimit || 300
     };
   }
 
@@ -87,7 +91,7 @@ function getAccountStats(account) {
     date: stats.date,
     sentToday: stats.sentToday,
     dailyLimit:
-      account.dailyLimit || 300
+      stats.dailyLimit || 300
   };
 }
 
@@ -100,17 +104,41 @@ function printLine() {
 const total =
   contacts.length;
 
+/*
+ * Overall progress from all 4 progress files.
+ */
+const nextContacts =
+  progressFiles.map(
+    (progress) =>
+      progress.nextContactIndex ?? 0
+  );
+
 const nextContact =
-  progress.nextContactIndex ?? 0;
+  Math.max(...nextContacts, 0);
 
 const sent =
-  progress.sent?.length ?? 0;
+  progressFiles.reduce(
+    (total, progress) =>
+      total +
+      (progress.sent?.length ?? 0),
+    0
+  );
 
 const failed =
-  progress.failed?.length ?? 0;
+  progressFiles.reduce(
+    (total, progress) =>
+      total +
+      (progress.failed?.length ?? 0),
+    0
+  );
 
 const skipped =
-  progress.skipped?.length ?? 0;
+  progressFiles.reduce(
+    (total, progress) =>
+      total +
+      (progress.skipped?.length ?? 0),
+    0
+  );
 
 const remaining =
   Math.max(
@@ -166,12 +194,20 @@ console.log(
   "\nACCOUNT STATUS\n"
 );
 
-accounts.forEach(
-  (account, index) => {
+/*
+ * Display each hardcoded email
+ * with its corresponding progress file.
+ */
+EMAIL_ACCOUNTS.forEach(
+  (email, index) => {
+
+    const progress =
+      progressFiles[index];
 
     const stats =
       getAccountStats(
-        account
+        email,
+        progress
       );
 
     const remainingToday =
@@ -182,7 +218,13 @@ accounts.forEach(
       );
 
     console.log(
-      `${index + 1}. ${account.email}`
+      `${index + 1}. ${email}`
+    );
+
+    console.log(
+      `   Progress file : progress${
+        index + 1
+      }.json`
     );
 
     console.log(
@@ -207,10 +249,25 @@ accounts.forEach(
 
 printLine();
 
+/*
+ * Show next account index
+ * for each progress file.
+ */
 console.log(
-  `Next account index : ${
-    progress.nextAccountIndex ?? 0
-  }`
+  "\nNEXT ACCOUNT INDEX"
+);
+
+progressFiles.forEach(
+  (progress, index) => {
+
+    console.log(
+      `Progress ${
+        index + 1
+      } : ${
+        progress.nextAccountIndex ?? 0
+      }`
+    );
+  }
 );
 
 console.log(
