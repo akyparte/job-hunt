@@ -499,7 +499,7 @@ async function main() {
         console.log(`\nWaiting ${waitSeconds} seconds...`);
 
         for (let seconds = waitSeconds; seconds > 0; seconds--) {
-          process.stdout.write(`\rNext email in ${seconds}s`);
+
 
           await wait(1000);
         }
